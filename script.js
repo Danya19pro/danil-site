@@ -24,33 +24,55 @@ if (SETTINGS.telegram) {
   addContact('@' + username, 'https://t.me/' + encodeURIComponent(username));
 }
 if (SETTINGS.phone) addContact(SETTINGS.phone, 'tel:' + SETTINGS.phone.replace(/[^+\d]/g, ''));
-if (SETTINGS.email) {
-  document.getElementById('submit-button').textContent = 'Подготовить письмо';
-  document.getElementById('form-note').textContent = 'Откроется ваша почтовая программа с готовой заявкой. Проверьте письмо и нажмите «Отправить» в ней.';
-}
 const form = document.getElementById('request-form');
+const submitButton = document.getElementById('submit-button');
+let submitting = false;
 form.querySelectorAll('input, textarea').forEach(field => {
   field.addEventListener('input', () => { field.setCustomValidity(''); document.getElementById('form-status').textContent = ''; });
 });
-form.addEventListener('submit', event => {
+form.addEventListener('submit', async event => {
   event.preventDefault();
+  if (submitting) return;
   const fields = [...form.querySelectorAll('input, textarea')];
   for (const field of fields) {
     const minimum = field.id === 'description' ? 10 : field.id === 'contact-method' ? 3 : 1;
     field.setCustomValidity(field.value.trim().length < minimum ? 'Заполните поле: минимум ' + minimum + ' символов без пробелов по краям.' : '');
   }
   if (!form.reportValidity()) return;
-  const body = 'Заявка на создание сайта\n\nИмя: ' + fields[0].value.trim() + '\nСпособ связи: ' + fields[1].value.trim() + '\n\nОписание задачи:\n' + fields[2].value.trim();
+  const data = new FormData(form);
+  fields.forEach(field => data.set(field.name, field.value.trim()));
   const status = document.getElementById('form-status');
-  if (SETTINGS.email) {
-    window.location.href = 'mailto:' + SETTINGS.email + '?subject=' + encodeURIComponent('Заявка на создание сайта') + '&body=' + encodeURIComponent(body);
-    status.textContent = 'Заявка подготовлена. Для отправки подтвердите письмо в почтовой программе. Если она не открылась, напишите по контактам слева.';
-  } else {
-    const url = URL.createObjectURL(new Blob(['\uFEFF' + body], { type: 'text/plain;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = 'Заявка-на-сайт.txt';
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    status.textContent = 'Файл заявки подготовлен для скачивания. Заявка не отправлена — передайте файл исполнителю самостоятельно.';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  submitting = true;
+  submitButton.disabled = true;
+  submitButton.textContent = 'Отправляем…';
+  form.setAttribute('aria-busy', 'true');
+  status.textContent = 'Отправляем заявку…';
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST',
+      body: data,
+      headers: { Accept: 'application/json' },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      status.textContent = response.status === 429
+        ? 'Слишком много запросов. Подождите немного и попробуйте ещё раз или напишите по email.'
+        : 'Не удалось отправить заявку. Попробуйте позже или напишите по email. Ваши данные остались в форме.';
+      return;
+    }
+    form.reset();
+    status.textContent = 'Заявка отправлена';
+  } catch (error) {
+    status.textContent = error.name === 'AbortError'
+      ? 'Сервис не ответил вовремя. Отправка не подтверждена. Данные сохранены в форме — попробуйте позже или напишите по email.'
+      : 'Не удалось подтвердить отправку. Проверьте подключение к интернету и попробуйте ещё раз. Данные остались в форме.';
+  } finally {
+    clearTimeout(timeout);
+    submitting = false;
+    submitButton.disabled = false;
+    submitButton.textContent = 'Отправить заявку';
+    form.removeAttribute('aria-busy');
   }
 });
